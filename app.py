@@ -1,17 +1,29 @@
 from flask import Flask, request, jsonify
-import joblib
+import torch
+from transformers import BertTokenizer, BertForSequenceClassification
+import re
+from nltk.corpus import stopwords
+import nltk
 
 app = Flask(__name__)
 
-MODEL_PATH = "./saved_model/best_model.pkl"
-VECTORIZER_PATH = "./saved_model/vectorizer.pkl"
+MODEL_PATH = "./saved_model/best_model"
+nltk_stopwords = set(stopwords.words('english'))
 
+def preprocess_text(text):
+    text = text.lower()
+    text = re.sub(r'[^a-z\s]', '', text)
+    text = ' '.join(word for word in text.split() if word not in nltk_stopwords)
+    return text
+
+# Load the tokenizer and model
 try:
-    model = joblib.load(MODEL_PATH)
-    vectorizer = joblib.load(VECTORIZER_PATH)
-    print("Model and vectorizer loaded successfully.")
+    tokenizer = BertTokenizer.from_pretrained(MODEL_PATH)
+    model = BertForSequenceClassification.from_pretrained(MODEL_PATH)
+    model.eval()  # Set the model to evaluation mode
+    print("Model and tokenizer loaded successfully.")
 except Exception as e:
-    print(f"Error loading model or vectorizer: {e}")
+    print(f"Error loading model or tokenizer: {e}")
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -23,9 +35,14 @@ def predict():
 
         preprocessed_text = preprocess_text(text)
 
-        transformed_text = vectorizer.transform([preprocessed_text])
+        # Tokenize and encode the input text
+        inputs = tokenizer(preprocessed_text, return_tensors="pt", truncation=True, padding=True, max_length=64)
 
-        probabilities = model.predict_proba(transformed_text)[0]
+        # Predict probabilities
+        with torch.no_grad():
+            outputs = model(**inputs)
+            logits = outputs.logits
+            probabilities = torch.nn.functional.sigmoid(logits).squeeze().tolist()
 
         class_names = ['Stress', 'Anxiety', 'Depression']
 
@@ -35,16 +52,6 @@ def predict():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-import re
-from nltk.corpus import stopwords
-nltk_stopwords = set(stopwords.words('english'))
-
-def preprocess_text(text):
-    text = text.lower()
-    text = re.sub(r'[^a-z\s]', '', text)
-    text = ' '.join(word for word in text.split() if word not in nltk_stopwords)
-    return text
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, ssl_context=('cert.pem', 'key.pem'))
